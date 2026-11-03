@@ -1,0 +1,6 @@
+{
+  "name": "PagoMovil Verify - Validador Automático",
+  "description": "Sistema de verificación automática de Pago Móvil en Venezuela conectado en tiempo real con notificaciones push y SMS de teléfonos Android.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
