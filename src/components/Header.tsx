@@ -1,5 +1,5 @@
 import React from 'react';
-import { CheckCircle2, Smartphone, Key } from 'lucide-react';
+import { CheckCircle2, Smartphone, Bell, BellOff } from 'lucide-react';
 import { DeviceGatewayStatus } from '../types/payment';
 
 interface HeaderProps {
@@ -7,6 +7,8 @@ interface HeaderProps {
   setActiveTab: (tab: 'verifier' | 'history') => void;
   deviceStatus: DeviceGatewayStatus | null;
   onOpenWebhookModal: () => void;
+  desktopNotifAllowed: boolean;
+  onRequestDesktopNotif: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -14,9 +16,9 @@ export const Header: React.FC<HeaderProps> = ({
   setActiveTab,
   deviceStatus,
   onOpenWebhookModal,
+  desktopNotifAllowed,
+  onRequestDesktopNotif,
 }) => {
-  const isOnline = deviceStatus?.connected ?? false;
-
   return (
     <header className="sticky top-0 z-30 bg-white border-b border-slate-200">
       <div className="max-w-5xl mx-auto px-4 sm:px-6">
@@ -55,8 +57,34 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           </nav>
 
-          {/* Zone 3: Webhook endpoint button */}
+          {/* Zone 3: Windows Notification Toggle & Webhook endpoint button */}
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={onRequestDesktopNotif}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap ${
+                desktopNotifAllowed
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                  : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+              }`}
+              title={
+                desktopNotifAllowed
+                  ? 'Notificaciones de escritorio en Windows activas'
+                  : 'Haz clic para activar notificaciones de escritorio en Windows'
+              }
+            >
+              {desktopNotifAllowed ? (
+                <>
+                  <Bell className="w-3.5 h-3.5 text-emerald-600" />
+                  <span className="hidden sm:inline">Alertas Windows: Activas</span>
+                </>
+              ) : (
+                <>
+                  <BellOff className="w-3.5 h-3.5 text-slate-400" />
+                  <span className="hidden sm:inline">Activar Alertas Windows</span>
+                </>
+              )}
+            </button>
+
             <button
               onClick={onOpenWebhookModal}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors whitespace-nowrap"
