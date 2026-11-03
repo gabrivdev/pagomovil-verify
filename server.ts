@@ -418,38 +418,43 @@ app.post('/api/settings/bcv', (req: Request, res: Response) => {
   return res.status(400).json({ error: 'Tasa inválida' });
 });
 
-// POST /api/payments/reset - Reseed test data
-app.post('/api/payments/reset', (_req: Request, res: Response) => {
-  transactions.forEach(t => {
-    t.status = 'UNCLAIMED';
-    t.claimedBy = undefined;
-    t.claimedForOrder = undefined;
-    t.claimedAt = undefined;
-  });
+// POST /api/payments/close-day - Clears transactions for the daily close
+app.post('/api/payments/close-day', (_req: Request, res: Response) => {
+  transactions = [];
   updateStats();
-  return res.json({ success: true, message: 'Transacciones reiniciadas.' });
+  saveTransactionsToDisk();
+  return res.json({ success: true, message: 'Cierre de caja completado. Historial reiniciado a 0.' });
 });
 
 // GET /api/export/csv - Download transactions CSV
-app.get('/api/export/csv', (_req: Request, res: Response) => {
-  const headers = ['ID', 'Fecha', 'Banco', 'Referencia', 'Monto VES', 'Monto USD', 'Teléfono', 'Cédula', 'Estado', 'Orden / Ticket', 'Cajero'];
+app.get('/api/export/csv', (req: Request, res: Response) => {
+  const rate = req.query.rate ? parseFloat(req.query.rate as string) || bcvRate : bcvRate;
+  const totalVes = transactions.reduce((acc, t) => acc + t.amountVes, 0);
+  const totalUsd = rate > 0 ? (totalVes / rate).toFixed(2) : '0.00';
+
+  const summary = [
+    `"CIERRE DE CAJA - PAGO MOVIL"`,
+    `"Fecha: ${new Date().toLocaleDateString('es-VE')}"`,
+    `"Tasa de Cambio: Bs. ${rate.toFixed(2)} por USD"`,
+    `"Total Transacciones: ${transactions.length}"`,
+    `"Total Recaudado VES: Bs. ${totalVes.toFixed(2)}"`,
+    `"Total Recaudado USD: $ ${totalUsd}"`,
+    ``,
+  ];
+
+  const headers = ['Hora', 'Banco', 'Referencia', 'Monto VES', 'Monto USD', 'Teléfono'];
   const rows = transactions.map(t => [
-    t.id,
-    t.receivedAt,
+    `"${new Date(t.receivedAt).toLocaleTimeString('es-VE')}"`,
     `"${t.bankName}"`,
     `"${t.reference}"`,
     t.amountVes.toFixed(2),
-    t.amountUsd?.toFixed(2) || '0.00',
+    rate > 0 ? (t.amountVes / rate).toFixed(2) : '0.00',
     `"${t.senderPhone || ''}"`,
-    `"${t.senderDocument || ''}"`,
-    t.status,
-    `"${t.claimedForOrder || ''}"`,
-    `"${t.claimedBy || ''}"`,
   ]);
 
-  const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+  const csvContent = [...summary, headers.join(','), ...rows.map(r => r.join(','))].join('\n');
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="pagomovil_report_${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.setHeader('Content-Disposition', `attachment; filename="Cierre_PagoMovil_${new Date().toISOString().slice(0, 10)}.csv"`);
   return res.send(csvContent);
 });
 
