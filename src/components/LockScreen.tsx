@@ -40,14 +40,8 @@ export const LockScreen: React.FC<LockScreenProps> = ({ onUnlock }) => {
     } else if (val === 'BACK') {
       setPin((prev) => prev.slice(0, -1));
     } else {
-      if (pin.length < 10) {
-        const nextPin = pin + val;
-        setPin(nextPin);
-        // If 4 digits entered, can auto-submit or let user click unlock
-        if (nextPin.length === 4) {
-          // slight delay for visual feedback
-          setTimeout(() => handleSubmit(nextPin), 150);
-        }
+      if (pin.length < 12) {
+        setPin((prev) => prev + val);
       }
     }
   };
@@ -55,7 +49,7 @@ export const LockScreen: React.FC<LockScreenProps> = ({ onUnlock }) => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key >= '0' && e.key <= '9') {
-        if (pin.length < 10) {
+        if (pin.length < 12) {
           setError(null);
           setPin((prev) => prev + e.key);
         }
@@ -92,9 +86,16 @@ export const LockScreen: React.FC<LockScreenProps> = ({ onUnlock }) => {
             <input
               type={showPin ? 'text' : 'password'}
               value={pin}
-              readOnly
-              placeholder="● ● ● ●"
-              className="w-full text-center py-3.5 px-10 text-2xl font-mono tracking-widest font-bold bg-slate-50 border-2 border-slate-200 rounded-xl focus:outline-none focus:border-emerald-500 text-slate-900"
+              onChange={(e) => {
+                setError(null);
+                setPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 12));
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSubmit();
+              }}
+              inputMode="numeric"
+              placeholder="••••••"
+              className="w-full text-center py-3.5 px-10 text-2xl font-mono tracking-widest font-bold bg-slate-50 border-2 border-slate-200 rounded-xl focus:outline-none focus:border-emerald-500 text-slate-900 placeholder:text-slate-300"
             />
             <button
               type="button"
