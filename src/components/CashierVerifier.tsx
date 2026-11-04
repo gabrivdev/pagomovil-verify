@@ -10,6 +10,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { VerificationResult, PagoMovilTransaction } from '../types/payment';
+import { authFetch } from '../utils/api';
 
 interface CashierVerifierProps {
   onPaymentVerified?: () => void;
@@ -28,7 +29,7 @@ export const CashierVerifier: React.FC<CashierVerifierProps> = ({ onPaymentVerif
     setLoading(true);
     try {
       const expectedVes = amount && !isNaN(parseFloat(amount)) ? parseFloat(amount) : undefined;
-      const response = await fetch('/api/payments/verify', {
+      const response = await authFetch('/api/payments/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

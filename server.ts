@@ -25,10 +25,55 @@ app.use(express.urlencoded({ extended: true }));
 // File persistence for real payments
 const DATA_DIR = path.resolve(__dirname, 'data');
 const PAYMENTS_FILE = path.join(DATA_DIR, 'payments.json');
+const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
+
+interface AppConfig {
+  accessPin: string;
+  isCustomizedInApp?: boolean;
+}
+
+function loadConfig(): AppConfig {
+  const envPin = process.env.ACCESS_PIN ? process.env.ACCESS_PIN.trim() : '';
+
+  try {
+    if (fs.existsSync(CONFIG_FILE)) {
+      const data = fs.readFileSync(CONFIG_FILE, 'utf-8');
+      const parsed = JSON.parse(data);
+      // If someone explicitly customized it within the app, respect that
+      if (parsed && parsed.isCustomizedInApp && parsed.accessPin) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.error('Error reading config.json:', err);
+  }
+
+  // Otherwise, Render environment variable ACCESS_PIN is the primary PIN
+  return {
+    accessPin: envPin || '1234',
+    isCustomizedInApp: false,
+  };
+}
+
+let appConfig: AppConfig = loadConfig();
+
+function saveConfigToDisk() {
+  try {
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(appConfig, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Error saving config.json:', err);
+  }
+}
+
+// In-memory active session tokens for Cashier terminal
+const activeSessions = new Set<string>();
+
+// Rate-limiting tracker for PIN entry
+const failedAttempts: { [ip: string]: { count: number; blockedUntil: number } } = {};
 
 function loadStoredTransactions(): PagoMovilTransaction[] {
   try {
@@ -231,8 +276,112 @@ app.post('/api/webhook/notification', async (req: Request, res: Response) => {
   });
 });
 
-// GET /api/payments - List all payments with optional filtering
-app.get('/api/payments', (req: Request, res: Response) => {
+// ==========================================
+// CASHIER AUTHENTICATION & SECURITY
+// ==========================================
+function getSessionTokenFromReq(req: Request): string | undefined {
+  const headerToken = req.headers['x-session-token'];
+  if (headerToken && typeof headerToken === 'string') return headerToken;
+  const bearer = req.headers.authorization;
+  if (bearer && bearer.startsWith('Bearer ')) return bearer.slice(7);
+  if (req.query.token && typeof req.query.token === 'string') return req.query.token;
+  return undefined;
+}
+
+function requireAuth(req: Request, res: Response, next: () => void) {
+  const token = getSessionTokenFromReq(req);
+  if (!token || !activeSessions.has(token)) {
+    return res.status(401).json({
+      error: 'Acceso no autorizado. Terminal de caja bloqueada.',
+      requiresAuth: true,
+    });
+  }
+  next();
+}
+
+// POST /api/auth/login - Check PIN and issue session token
+app.post('/api/auth/login', (req: Request, res: Response) => {
+  const { pin } = req.body;
+  const ip = (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
+  const now = Date.now();
+
+  const attempt = failedAttempts[ip];
+  if (attempt && attempt.blockedUntil > now) {
+    const remainingSec = Math.ceil((attempt.blockedUntil - now) / 1000);
+    return res.status(429).json({
+      error: `Demasiados intentos fallidos. Por seguridad, espera ${remainingSec} segundos.`,
+    });
+  }
+
+  const expectedPin = (appConfig.accessPin || process.env.ACCESS_PIN || '1234').trim();
+
+  if (!pin || pin.toString().trim() !== expectedPin) {
+    const count = (attempt?.count || 0) + 1;
+    let blockedUntil = 0;
+    if (count >= 5) {
+      blockedUntil = now + 15000; // 15 seconds lockout
+    }
+    failedAttempts[ip] = { count, blockedUntil };
+    return res.status(401).json({
+      error: 'PIN incorrecto. Verifica el código e intenta de nuevo.',
+    });
+  }
+
+  // Success: reset attempts
+  delete failedAttempts[ip];
+  const token = 'pos_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
+  activeSessions.add(token);
+
+  return res.json({
+    success: true,
+    token,
+    message: 'Sesión iniciada exitosamente',
+  });
+});
+
+// GET /api/auth/verify - Validate session token
+app.get('/api/auth/verify', (req: Request, res: Response) => {
+  const token = getSessionTokenFromReq(req);
+  if (token && activeSessions.has(token)) {
+    return res.json({ authenticated: true });
+  }
+  return res.status(401).json({ authenticated: false });
+});
+
+// POST /api/auth/logout - End cashier session
+app.post('/api/auth/logout', (req: Request, res: Response) => {
+  const token = getSessionTokenFromReq(req);
+  if (token) {
+    activeSessions.delete(token);
+  }
+  return res.json({ success: true, message: 'Caja bloqueada' });
+});
+
+// POST /api/auth/change-pin - Change cashier PIN
+app.post('/api/auth/change-pin', requireAuth, (req: Request, res: Response) => {
+  const { currentPin, newPin } = req.body;
+  const expectedPin = (appConfig.accessPin || process.env.ACCESS_PIN || '1234').trim();
+
+  if (!currentPin || currentPin.toString().trim() !== expectedPin) {
+    return res.status(400).json({ error: 'El PIN actual no es correcto.' });
+  }
+
+  if (!newPin || newPin.toString().trim().length < 4) {
+    return res.status(400).json({ error: 'El nuevo PIN debe tener al menos 4 caracteres o números.' });
+  }
+
+  appConfig.accessPin = newPin.toString().trim();
+  appConfig.isCustomizedInApp = true;
+  saveConfigToDisk();
+
+  return res.json({
+    success: true,
+    message: 'PIN de caja actualizado correctamente.',
+  });
+});
+
+// GET /api/payments - List all payments with optional filtering (Protected)
+app.get('/api/payments', requireAuth, (req: Request, res: Response) => {
   const { status, bank, query } = req.query;
   let filtered = [...transactions];
 
@@ -264,7 +413,7 @@ app.get('/api/payments', (req: Request, res: Response) => {
 });
 
 // POST /api/payments/verify - Check and validate a payment (Cashier POS)
-app.post('/api/payments/verify', (req: Request, res: Response) => {
+app.post('/api/payments/verify', requireAuth, (req: Request, res: Response) => {
   const {
     reference,
     expectedAmountVes,
@@ -349,7 +498,7 @@ app.post('/api/payments/verify', (req: Request, res: Response) => {
 });
 
 // POST /api/payments/claim - Manually claim a transaction
-app.post('/api/payments/claim', (req: Request, res: Response) => {
+app.post('/api/payments/claim', requireAuth, (req: Request, res: Response) => {
   const { id, orderNumber, claimedBy } = req.body;
   const tx = transactions.find(t => t.id === id);
   if (!tx) {
@@ -366,7 +515,7 @@ app.post('/api/payments/claim', (req: Request, res: Response) => {
 });
 
 // POST /api/payments/unclaim - Revert claimed status
-app.post('/api/payments/unclaim', (req: Request, res: Response) => {
+app.post('/api/payments/unclaim', requireAuth, (req: Request, res: Response) => {
   const { id } = req.body;
   const tx = transactions.find(t => t.id === id);
   if (!tx) {
@@ -383,7 +532,7 @@ app.post('/api/payments/unclaim', (req: Request, res: Response) => {
 });
 
 // GET /api/device/status - Device gateway and stats
-app.get('/api/device/status', (req: Request, res: Response) => {
+app.get('/api/device/status', requireAuth, (req: Request, res: Response) => {
   updateStats();
   const host = req.get('host') || 'localhost:3000';
   const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
@@ -404,7 +553,7 @@ app.post('/api/device/ping', (req: Request, res: Response) => {
 });
 
 // POST /api/settings/bcv - Update BCV rate
-app.post('/api/settings/bcv', (req: Request, res: Response) => {
+app.post('/api/settings/bcv', requireAuth, (req: Request, res: Response) => {
   const { rate } = req.body;
   if (rate && !isNaN(Number(rate)) && Number(rate) > 0) {
     bcvRate = Number(rate);
@@ -419,7 +568,7 @@ app.post('/api/settings/bcv', (req: Request, res: Response) => {
 });
 
 // POST /api/payments/close-day - Clears transactions for the daily close
-app.post('/api/payments/close-day', (_req: Request, res: Response) => {
+app.post('/api/payments/close-day', requireAuth, (_req: Request, res: Response) => {
   transactions = [];
   updateStats();
   saveTransactionsToDisk();
@@ -427,7 +576,7 @@ app.post('/api/payments/close-day', (_req: Request, res: Response) => {
 });
 
 // GET /api/export/csv - Download transactions CSV
-app.get('/api/export/csv', (req: Request, res: Response) => {
+app.get('/api/export/csv', requireAuth, (req: Request, res: Response) => {
   const rate = req.query.rate ? parseFloat(req.query.rate as string) || bcvRate : bcvRate;
   const totalVes = transactions.reduce((acc, t) => acc + t.amountVes, 0);
   const totalUsd = rate > 0 ? (totalVes / rate).toFixed(2) : '0.00';

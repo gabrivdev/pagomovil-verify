@@ -3,8 +3,11 @@ import { Header } from './components/Header';
 import { CashierVerifier } from './components/CashierVerifier';
 import { TransactionsFeed } from './components/TransactionsFeed';
 import { WebhookModal } from './components/WebhookModal';
+import { LockScreen } from './components/LockScreen';
+import { ChangePinModal } from './components/ChangePinModal';
 import { PagoMovilTransaction, DeviceGatewayStatus } from './types/payment';
 import { Bell, X } from 'lucide-react';
+import { authFetch, verifyCurrentSession, logoutSession } from './utils/api';
 
 // Synthesize pleasant chime using Web Audio API
 function playChime() {
@@ -32,6 +35,8 @@ function playChime() {
 }
 
 export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [isChangePinModalOpen, setIsChangePinModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'verifier' | 'history'>('verifier');
   const [transactions, setTransactions] = useState<PagoMovilTransaction[]>([]);
   const [deviceStatus, setDeviceStatus] = useState<DeviceGatewayStatus | null>(null);
@@ -46,6 +51,26 @@ export default function App() {
     }
     return false;
   });
+
+  // Verify session on app load
+  useEffect(() => {
+    let mounted = true;
+    verifyCurrentSession().then((isValid) => {
+      if (mounted) {
+        setIsAuthenticated(isValid);
+      }
+    });
+
+    const handleUnauthorized = () => {
+      setIsAuthenticated(false);
+    };
+
+    window.addEventListener('auth:unauthorized', handleUnauthorized);
+    return () => {
+      mounted = false;
+      window.removeEventListener('auth:unauthorized', handleUnauthorized);
+    };
+  }, []);
 
   const requestDesktopNotif = async () => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
@@ -89,7 +114,7 @@ export default function App() {
 
   const fetchPayments = async () => {
     try {
-      const res = await fetch('/api/payments');
+      const res = await authFetch('/api/payments');
       if (res.ok) {
         const data = await res.json();
         const incoming: PagoMovilTransaction[] = data.transactions || [];
@@ -107,19 +132,50 @@ export default function App() {
         if (data.device) {
           setDeviceStatus(data.device);
         }
+      } else if (res.status === 401) {
+        setIsAuthenticated(false);
       }
     } catch (err) {
       console.error('Error fetching payments:', err);
     }
   };
 
+  // Poll for payments only when authenticated
   useEffect(() => {
-    fetchPayments();
+    if (!isAuthenticated) return;
 
-    // Auto-poll every 3.5s so notifications appear instantly
+    fetchPayments();
     const interval = setInterval(fetchPayments, 3500);
     return () => clearInterval(interval);
-  }, []);
+  }, [isAuthenticated]);
+
+  const handleLock = async () => {
+    await logoutSession();
+    setIsAuthenticated(false);
+  };
+
+  // 1. Loading screen while validating initial session
+  if (isAuthenticated === null) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+          <span className="text-xs text-slate-400 font-mono">Iniciando terminal de caja...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Lock screen if not authenticated
+  if (!isAuthenticated) {
+    return (
+      <LockScreen
+        onUnlock={() => {
+          setIsAuthenticated(true);
+        }}
+      />
+    );
+  }
 
   const webhookUrl =
     deviceStatus?.webhookUrl ||
@@ -129,6 +185,7 @@ export default function App() {
 
   const apiKey = deviceStatus?.apiKey || 'pago_live_99a8b7c6';
 
+  // 3. Authenticated POS Dashboard
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans">
       <Header
@@ -138,6 +195,8 @@ export default function App() {
         onOpenWebhookModal={() => setIsWebhookModalOpen(true)}
         desktopNotifAllowed={desktopNotifAllowed}
         onRequestDesktopNotif={requestDesktopNotif}
+        onLock={handleLock}
+        onOpenChangePin={() => setIsChangePinModalOpen(true)}
       />
 
       <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-8">
@@ -190,8 +249,14 @@ export default function App() {
         apiKey={apiKey}
       />
 
+      {/* Modal to Change PIN */}
+      <ChangePinModal
+        isOpen={isChangePinModalOpen}
+        onClose={() => setIsChangePinModalOpen(false)}
+      />
+
       <footer className="py-4 border-t border-slate-200 mt-auto text-center text-xs text-slate-400">
-        Verificador Pago Móvil · Conectado en tiempo real con Android y Alertas de Windows
+        Verificador Pago Móvil · Terminal Protegida con PIN · Alertas en Tiempo Real
       </footer>
     </div>
   );

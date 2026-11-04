@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { PagoMovilTransaction } from '../types/payment';
 import { getBankInfo } from '../utils/banks';
+import { authFetch } from '../utils/api';
 
 interface TransactionsFeedProps {
   transactions: PagoMovilTransaction[];
@@ -110,7 +111,7 @@ export const TransactionsFeed: React.FC<TransactionsFeedProps> = ({
       URL.revokeObjectURL(url);
 
       // 2. Clear transactions on server
-      const res = await fetch('/api/payments/close-day', { method: 'POST' });
+      const res = await authFetch('/api/payments/close-day', { method: 'POST' });
       if (res.ok) {
         setIsClosingModalOpen(false);
         setClosingSuccessMsg(`¡Cierre completado! Se exportó el archivo Excel y la caja se reinició a Bs. 0.00`);
